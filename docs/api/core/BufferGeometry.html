@@ -105,6 +105,20 @@
 		Rather than accessing this property directly, use [page:.addAttribute] and [page:.getAttribute] to access attributes of this geometry.
 		</p>
 
+		<h3>[property:Object vao]</h3>
+		<p>
+			This property controls whether three uses a Vertex Array Object when rendering this object. Using VAOs give a
+			performance improvement but are only available in WebGL2.
+
+			The default value is false, meaning use the default VAO. If set to true, three creates a VAO and uses it for this geometry.
+
+			If set to an actual VAO instance (i.e.  `geometry.vao = gl.createVertexArray();`), then three will use it. When you're
+			done, you'll have to destroy it yourself. You can share a VAO between many geometries (but if vaoStatic is true, they
+			all need to have the same attributes).
+
+			Three automatically destroys VAOs that it created automatically.
+		</p>
+
 		<h3>[property:Box3 boundingBox]</h3>
 		<p>
 			Bounding box for the bufferGeometry, which can be calculated with

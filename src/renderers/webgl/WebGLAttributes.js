@@ -2,7 +2,7 @@
  * @author mrdoob / http://mrdoob.com/
  */
 
-function WebGLAttributes( gl ) {
+function WebGLAttributes( gl, state ) {
 
 	var buffers = new WeakMap();
 
@@ -13,7 +13,11 @@ function WebGLAttributes( gl ) {
 
 		var buffer = gl.createBuffer();
 
-		gl.bindBuffer( bufferType, buffer );
+		if (bufferType === gl.ARRAY_BUFFER) {
+			state.bindArrayBuffer( buffer );
+		} else {
+			gl.bindBuffer( bufferType, buffer );
+		}
 		gl.bufferData( bufferType, array, usage );
 
 		attribute.onUploadCallback();

@@ -271,7 +271,7 @@ function WebGLRenderer( parameters ) {
 		info = new WebGLInfo( _gl );
 		properties = new WebGLProperties();
 		textures = new WebGLTextures( _gl, extensions, state, properties, capabilities, utils, info );
-		attributes = new WebGLAttributes( _gl );
+		attributes = new WebGLAttributes( _gl, state );
 		geometries = new WebGLGeometries( _gl, attributes, info );
 		objects = new WebGLObjects( geometries, info );
 		morphtargets = new WebGLMorphtargets( _gl );
@@ -603,41 +603,41 @@ function WebGLRenderer( parameters ) {
 
 		if ( object.hasPositions ) {
 
-			_gl.bindBuffer( _gl.ARRAY_BUFFER, buffers.position );
+			state.bindArrayBuffer( buffers.position );
 			_gl.bufferData( _gl.ARRAY_BUFFER, object.positionArray, _gl.DYNAMIC_DRAW );
 
 			state.enableAttribute( programAttributes.position );
-			_gl.vertexAttribPointer( programAttributes.position, 3, _gl.FLOAT, false, 0, 0 );
+			state.attributePointer( programAttributes.position, 3, _gl.FLOAT, false, 0, 0 );
 
 		}
 
 		if ( object.hasNormals ) {
 
-			_gl.bindBuffer( _gl.ARRAY_BUFFER, buffers.normal );
+			state.bindArrayBuffer( buffers.normal );
 			_gl.bufferData( _gl.ARRAY_BUFFER, object.normalArray, _gl.DYNAMIC_DRAW );
 
 			state.enableAttribute( programAttributes.normal );
-			_gl.vertexAttribPointer( programAttributes.normal, 3, _gl.FLOAT, false, 0, 0 );
+			state.attributePointer( programAttributes.normal, 3, _gl.FLOAT, false, 0, 0 );
 
 		}
 
 		if ( object.hasUvs ) {
 
-			_gl.bindBuffer( _gl.ARRAY_BUFFER, buffers.uv );
+			state.bindArrayBuffer( buffers.uv );
 			_gl.bufferData( _gl.ARRAY_BUFFER, object.uvArray, _gl.DYNAMIC_DRAW );
 
 			state.enableAttribute( programAttributes.uv );
-			_gl.vertexAttribPointer( programAttributes.uv, 2, _gl.FLOAT, false, 0, 0 );
+			state.attributePointer( programAttributes.uv, 2, _gl.FLOAT, false, 0, 0 );
 
 		}
 
 		if ( object.hasColors ) {
 
-			_gl.bindBuffer( _gl.ARRAY_BUFFER, buffers.color );
+			state.bindArrayBuffer( buffers.color );
 			_gl.bufferData( _gl.ARRAY_BUFFER, object.colorArray, _gl.DYNAMIC_DRAW );
 
 			state.enableAttribute( programAttributes.color );
-			_gl.vertexAttribPointer( programAttributes.color, 3, _gl.FLOAT, false, 0, 0 );
+			state.attributePointer( programAttributes.color, 3, _gl.FLOAT, false, 0, 0 );
 
 		}
 
@@ -681,7 +681,6 @@ function WebGLRenderer( parameters ) {
 		//
 
 		var index = geometry.index;
-		var position = geometry.attributes.position;
 		var rangeFactor = 1;
 
 		if ( material.wireframe === true ) {
@@ -697,6 +696,10 @@ function WebGLRenderer( parameters ) {
 		if ( index !== null ) {
 
 			attribute = attributes.get( index );
+			if ( !attribute ) {
+				// attribute was never updated, see docs for BufferGeometry.updateOnce
+				return false;
+			}
 
 			renderer = indexedBufferRenderer;
 			renderer.setIndex( attribute );
@@ -705,11 +708,15 @@ function WebGLRenderer( parameters ) {
 
 		if ( updateBuffers ) {
 
-			setupVertexAttributes( material, program, geometry );
+			if ( !setupVertexAttributes( material, program, geometry ) ) {
+				// at least one attribute was never updated
+				return false;
+			}
 
 			if ( index !== null ) {
 
-				_gl.bindBuffer( _gl.ELEMENT_ARRAY_BUFFER, attribute.buffer );
+				state.bindElementArrayBuffer( attribute.buffer );
+				// _gl.bindBuffer( _gl.ELEMENT_ARRAY_BUFFER, attribute.buffer );
 
 			}
 
@@ -718,6 +725,7 @@ function WebGLRenderer( parameters ) {
 		//
 
 		var dataCount = Infinity;
+		var position = geometry.attributes.position;
 
 		if ( index !== null ) {
 
@@ -821,15 +829,43 @@ function WebGLRenderer( parameters ) {
 	};
 
 	function setupVertexAttributes( material, program, geometry ) {
+		// if ( geometry.isInstancedBufferGeometry & ! capabilities.isWebGL2 ) {
 
-		if ( geometry && geometry.isInstancedBufferGeometry & ! capabilities.isWebGL2 ) {
+		// 	if ( extensions.get( 'ANGLE_instanced_arrays' ) === null ) {
 
-			if ( extensions.get( 'ANGLE_instanced_arrays' ) === null ) {
+		// 		console.error( 'THREE.WebGLRenderer.setupVertexAttributes: using THREE.InstancedBufferGeometry but hardware does not support extension ANGLE_instanced_arrays.' );
+		// 		return false;
 
-				console.error( 'THREE.WebGLRenderer.setupVertexAttributes: using THREE.InstancedBufferGeometry but hardware does not support extension ANGLE_instanced_arrays.' );
-				return;
+		// 	}
+
+		// }
+
+		var vaoVal = geometry._vao || geometry.vao;
+		if ( vaoVal ) {
+
+			if ( vaoVal === true ) {
+
+				// generate new vao
+				state.bindVAO( geometry._vao = _gl.createVertexArray() );
+				geometry._vaoAutocreated = true;
+
+			} else if ( geometry._vao && vaoVal._cache ) {
+
+				// skip vertex setup on static vao
+				state.bindVAO( geometry._vao = vaoVal );
+				return true;
+
+			} else {
+
+				// use vao but don't skip attribute setup
+				state.bindVAO( geometry._vao = vaoVal );
 
 			}
+
+		} else {
+
+			// unbind vao
+			state.bindVAO( null );
 
 		}
 
@@ -856,9 +892,9 @@ function WebGLRenderer( parameters ) {
 
 					var attribute = attributes.get( geometryAttribute );
 
-					// TODO Attribute may not be available on context restore
-
-					if ( attribute === undefined ) continue;
+					// attributes that weren't ever updated are undefined, if so, we cannot render this object.
+					// TODO Attribute may also not be available on context restore
+					if ( attribute === undefined ) return false;
 
 					var buffer = attribute.buffer;
 					var type = attribute.type;
@@ -870,9 +906,11 @@ function WebGLRenderer( parameters ) {
 						var stride = data.stride;
 						var offset = geometryAttribute.offset;
 
+						state.enableAttribute( programAttribute );
+
 						if ( data && data.isInstancedInterleavedBuffer ) {
 
-							state.enableAttributeAndDivisor( programAttribute, data.meshPerAttribute );
+							state.attributeDivisor( programAttribute, data.meshPerAttribute );
 
 							if ( geometry.maxInstancedCount === undefined ) {
 
@@ -882,18 +920,19 @@ function WebGLRenderer( parameters ) {
 
 						} else {
 
-							state.enableAttribute( programAttribute );
+							state.attributeDivisor( programAttribute, 0 );
 
 						}
 
-						_gl.bindBuffer( _gl.ARRAY_BUFFER, buffer );
-						_gl.vertexAttribPointer( programAttribute, size, type, normalized, stride * bytesPerElement, offset * bytesPerElement );
+						state.attributePointer( buffer, programAttribute, size, type, normalized, stride * bytesPerElement, offset * bytesPerElement);
 
 					} else {
 
+						state.enableAttribute( programAttribute );
+
 						if ( geometryAttribute.isInstancedBufferAttribute ) {
 
-							state.enableAttributeAndDivisor( programAttribute, geometryAttribute.meshPerAttribute );
+							state.attributeDivisor( programAttribute, geometryAttribute.meshPerAttribute );
 
 							if ( geometry.maxInstancedCount === undefined ) {
 
@@ -903,12 +942,11 @@ function WebGLRenderer( parameters ) {
 
 						} else {
 
-							state.enableAttribute( programAttribute );
+							state.attributeDivisor( programAttribute, 0 );
 
 						}
 
-						_gl.bindBuffer( _gl.ARRAY_BUFFER, buffer );
-						_gl.vertexAttribPointer( programAttribute, size, type, normalized, 0, 0 );
+						state.attributePointer( buffer, programAttribute, size, type, normalized, 0, 0 );
 
 					}
 
@@ -946,6 +984,8 @@ function WebGLRenderer( parameters ) {
 		}
 
 		state.disableUnusedAttributes();
+
+		return true;
 
 	}
 

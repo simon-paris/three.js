@@ -40,6 +40,10 @@ function BufferGeometry() {
 
 	this.userData = {};
 
+	this.vao = false;
+	this._vao = null;
+	this._vaoAutocreated = null;
+
 }
 
 BufferGeometry.prototype = Object.assign( Object.create( EventDispatcher.prototype ), {

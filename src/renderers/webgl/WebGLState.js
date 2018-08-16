@@ -306,16 +306,39 @@ function WebGLState( gl, extensions, utils, capabilities ) {
 
 	}
 
-	//
+	var maxVertexAttributes = gl.getParameter( gl.MAX_VERTEX_ATTRIBS );
+
+	var VAOState = function () {
+
+		this.random = Math.random();
+		this.pointers = [];
+		for (var i = 0; i < maxVertexAttributes; i++) {
+			this.pointers.push({
+				buffer: null,
+				size: null,
+				type: null,
+				normalized: null,
+				stride: null,
+				offset: null,
+			});
+		}
+		this.attributeDivisors = new Uint8Array( maxVertexAttributes );
+		this.enabledAttributes = new Uint8Array( maxVertexAttributes );
+		this.boundElementArrayBuffer = null;
+
+	};
 
 	var colorBuffer = new ColorBuffer();
 	var depthBuffer = new DepthBuffer();
 	var stencilBuffer = new StencilBuffer();
 
-	var maxVertexAttributes = gl.getParameter( gl.MAX_VERTEX_ATTRIBS );
-	var newAttributes = new Uint8Array( maxVertexAttributes );
-	var enabledAttributes = new Uint8Array( maxVertexAttributes );
-	var attributeDivisors = new Uint8Array( maxVertexAttributes );
+	var wantedAttributes = new Uint8Array( maxVertexAttributes );
+
+	var currentGlobalBoundArrayBuffer = null;
+	var currentGlobalBoundElementArrayBuffer = null;
+	var defaultVAOCache = new VAOState();
+	var currentBoundVAO = null;
+	var currentBoundVAOCache = defaultVAOCache;
 
 	var enabledCapabilities = {};
 
@@ -405,11 +428,59 @@ function WebGLState( gl, extensions, utils, capabilities ) {
 
 	//
 
+	function bindArrayBuffer( buffer ) {
+
+		if (currentGlobalBoundArrayBuffer !== buffer ) {
+
+			currentGlobalBoundArrayBuffer = buffer;
+			gl.bindBuffer( gl.ARRAY_BUFFER, buffer );
+
+		}
+
+	}
+
+	function bindElementArrayBuffer( buffer ) {
+
+		if (currentBoundVAOCache.boundElementArrayBuffer !== buffer ) {
+
+			currentBoundVAOCache.boundElementArrayBuffer = buffer;
+			gl.bindBuffer( gl.ELEMENT_ARRAY_BUFFER, buffer );
+
+		}
+
+	}
+
+	function bindVAO( vao ) {
+
+		if (currentBoundVAO !== vao ) {
+			gl.bindVertexArray( vao );
+
+			if ( vao === null ) {
+				currentBoundVAO = null;
+				currentBoundVAOCache = defaultVAOCache;
+			} else {
+
+				if ( !vao._cache ) {
+					vao._cache = new VAOState();
+				}
+
+				currentBoundVAO = vao;
+				currentBoundVAOCache = vao._cache;
+			}
+
+		}
+
+	}
+
+	function forgetVAOState() {
+		currentBoundVAOCache.call(VAOState);
+	}
+
 	function initAttributes() {
 
-		for ( var i = 0, l = newAttributes.length; i < l; i ++ ) {
+		for ( var i = 0, l = wantedAttributes.length; i < l; i ++ ) {
 
-			newAttributes[ i ] = 0;
+			wantedAttributes[ i ] = 0;
 
 		}
 
@@ -417,27 +488,78 @@ function WebGLState( gl, extensions, utils, capabilities ) {
 
 	function enableAttribute( attribute ) {
 
-		enableAttributeAndDivisor( attribute, 0 );
+		wantedAttributes[ attribute ] = 1;
 
-	}
-
-	function enableAttributeAndDivisor( attribute, meshPerAttribute ) {
-
-		newAttributes[ attribute ] = 1;
-
-		if ( enabledAttributes[ attribute ] === 0 ) {
+		if ( currentBoundVAOCache.enabledAttributes[ attribute ] === 0 ) {
 
 			gl.enableVertexAttribArray( attribute );
-			enabledAttributes[ attribute ] = 1;
+			currentBoundVAOCache.enabledAttributes[ attribute ] = 1;
 
 		}
 
-		if ( attributeDivisors[ attribute ] !== meshPerAttribute ) {
+	}
+
+	var attributeDivisor;
+	if (capabilities.isWebGL2) {
+		attributeDivisor = function (attribute, meshPerAttribute) {
+
+			if ( currentBoundVAOCache.attributeDivisors[ attribute ] !== meshPerAttribute ) {
+
+				gl.vertexAttribDivisor( attribute, meshPerAttribute );
+				currentBoundVAOCache.attributeDivisors[ attribute ] = meshPerAttribute;
+
+			}
+
+		};
+	} else {
+
+		var ext = extensions.get( 'ANGLE_instanced_arrays' ) || function () {
+			console.error('THREE.WebGLState.attributeDivisor: No WebGL2 and no ANGLE_instanced_arrays, unable to set divisor. Are you using THREE.InstancedBufferGeometry on hardware that doesn\'t support it?.');
+		};
+
+		attributeDivisor = function ( attribute, meshPerAttribute ) {
+
+			if ( currentBoundVAOCache.attributeDivisors[ attribute ] !== meshPerAttribute ) {
+
+				ext.vertexAttribDivisorANGLE( attribute, meshPerAttribute );
+				currentBoundVAOCache.attributeDivisors[ attribute ] = meshPerAttribute;
+
+			}
+		}
+
+	}
+	function attributeDivisor( attribute, meshPerAttribute ) {
+
+		if ( currentBoundVAOCache.attributeDivisors[ attribute ] !== meshPerAttribute ) {
 
 			var extension = capabilities.isWebGL2 ? gl : extensions.get( 'ANGLE_instanced_arrays' );
 
 			extension[ capabilities.isWebGL2 ? 'vertexAttribDivisor' : 'vertexAttribDivisorANGLE' ]( attribute, meshPerAttribute );
-			attributeDivisors[ attribute ] = meshPerAttribute;
+			currentBoundVAOCache.attributeDivisors[ attribute ] = meshPerAttribute;
+
+		}
+	}
+
+	function attributePointer( buffer, programAttribute, size, type, normalized, stride, offset ) {
+
+		let ptr = currentBoundVAOCache.pointers[ programAttribute ];
+
+		if ( ptr.buffer !== buffer ||
+			ptr.size !== size ||
+			ptr.type !== type ||
+			ptr.normalized !== normalized ||
+			ptr.stride !== stride ||
+			ptr.offset !== offset) {
+
+			bindArrayBuffer( buffer );
+			gl.vertexAttribPointer( programAttribute, size, type, normalized, stride, offset );
+
+			ptr.buffer = buffer;
+			ptr.size = size;
+			ptr.type = type;
+			ptr.normalized = normalized;
+			ptr.stride = stride;
+			ptr.offset = offset;
 
 		}
 
@@ -445,12 +567,12 @@ function WebGLState( gl, extensions, utils, capabilities ) {
 
 	function disableUnusedAttributes() {
 
-		for ( var i = 0, l = enabledAttributes.length; i !== l; ++ i ) {
+		for ( var i = 0, l = currentBoundVAOCache.enabledAttributes.length; i !== l; ++ i ) {
 
-			if ( enabledAttributes[ i ] !== newAttributes[ i ] ) {
+			if ( currentBoundVAOCache.enabledAttributes[ i ] === 1 && wantedAttributes[ i ] === 0 ) {
 
 				gl.disableVertexAttribArray( i );
-				enabledAttributes[ i ] = 0;
+				currentBoundVAOCache.enabledAttributes[ i ] = 0;
 
 			}
 
@@ -924,12 +1046,21 @@ function WebGLState( gl, extensions, utils, capabilities ) {
 			stencil: stencilBuffer
 		},
 
+		bindArrayBuffer: bindArrayBuffer,
+		bindElementArrayBuffer: bindElementArrayBuffer,
+		bindVAO: bindVAO,
+		forgetVAOState: forgetVAOState,
+
 		initAttributes: initAttributes,
 		enableAttribute: enableAttribute,
-		enableAttributeAndDivisor: enableAttributeAndDivisor,
 		disableUnusedAttributes: disableUnusedAttributes,
+
+		attributeDivisor: attributeDivisor,
+		attributePointer: attributePointer,
+
 		enable: enable,
 		disable: disable,
+
 		getCompressedTextureFormats: getCompressedTextureFormats,
 
 		useProgram: useProgram,
